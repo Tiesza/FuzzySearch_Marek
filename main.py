@@ -6,6 +6,7 @@ import sqlite3
 
 app = FastAPI()
 
+# Načti všechna data z databáze jednou
 def nacti_data():
     conn = sqlite3.connect("produkty.db")
     cursor = conn.cursor()
@@ -16,20 +17,18 @@ def nacti_data():
 
 data_z_db = nacti_data()
 
+# Najdi nejbližší odpovídající kód a název
 def najdi_kod(kontrolovany_kod):
     kod_input = kontrolovany_kod.strip()
 
-    # Přesná shoda
     for kod, nazev in data_z_db:
         if kod_input == kod:
             return kod, nazev
 
-    # Substring shoda
     for kod, nazev in data_z_db:
         if kod in kod_input:
             return kod, nazev
 
-    # Fuzzy shoda
     best_score = 0
     best_match = None
     for kod, nazev in data_z_db:
@@ -43,16 +42,14 @@ def najdi_kod(kontrolovany_kod):
     else:
         return "nenalezeno", "nenalezeno"
 
-@app.post("/kontrola")
-async def kontrola_tovaru(data: Dict[str, Any]):
-    polozky = data.get("polozky", [])
+# 🔧 Uprav každou položku v rámci objektu
+def zpracuj_objekt(objekt: Dict[str, Any]) -> Dict[str, Any]:
     nove_polozky = []
 
-    for polozka in polozky:
+    for polozka in objekt.get("polozky", []):
         puvodni_kod = polozka.get("Katalog", "")
         novy_kod, nazev = najdi_kod(puvodni_kod)
 
-        # Přepiš pole "Katalog" i v "ObsahPolozky > Artikl > Katalog"
         polozka["Katalog"] = novy_kod
         polozka["Nazev"] = nazev
 
@@ -61,4 +58,11 @@ async def kontrola_tovaru(data: Dict[str, Any]):
 
         nove_polozky.append(polozka)
 
-    return { "polozky": nove_polozky }
+    objekt["polozky"] = nove_polozky
+    return objekt
+
+# 🔁 Endpoint pro pole objektů
+@app.post("/kontrola")
+async def hromadna_kontrola(data: List[Dict[str, Any]]):
+    upravene = [zpracuj_objekt(obj) for obj in data]
+    return upravene

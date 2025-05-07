@@ -26,12 +26,14 @@ async def debug_vstup(request: Request):
 # ✅ Hlavní endpoint pro ověření kódů
 @app.post("/overit-hromadne")
 def overit_kody_bulk(data: VstupData):
-    # Připojení k databázi
     conn = None
     try:
         conn = sqlite3.connect("produkty.db")
         cursor = conn.cursor()
-        cursor.execute("SELECT kod FROM produkty")
+        cursor.execute("""
+            SELECT Katalog, AlternativKatalog1, AlternativKatalog2, AlternativKatalog3
+            FROM produkty
+        """)
         vysledky_db = cursor.fetchall()
     except sqlite3.Error as e:
         raise HTTPException(status_code=500, detail=f"Chyba při připojení nebo čtení z databáze: {str(e)}")
@@ -40,17 +42,24 @@ def overit_kody_bulk(data: VstupData):
             conn.close()
 
     if not vysledky_db:
-        raise HTTPException(status_code=404, detail="Databáze neobsahuje žádné kódy")
+        raise HTTPException(status_code=404, detail="Databáze neobsahuje žádné záznamy")
 
-    # Vyčištění seznamu
-    kody = [radek[0] for radek in vysledky_db if radek[0]]
+    # Vytvoření množiny všech dostupných kódů (unikátní hodnoty, žádné None)
+    kody = set()
+    for radek in vysledky_db:
+        for hodnota in radek:
+            if hodnota:
+                kody.add(str(hodnota).strip())
+
+    kody = list(kody)
 
     vysledne_polozky = []
 
     for polozka in data.Polozky:
-        zadany_kod = polozka.Katalog
+        zadany_kod = polozka.Katalog.strip()
 
         vysledky = [(kod, fuzz.ratio(zadany_kod, kod)) for kod in kody]
+
         if not vysledky:
             nejlepsi = "nenalezeno"
         else:
@@ -75,7 +84,6 @@ def overit_kody_bulk(data: VstupData):
         "Polozky": vysledne_polozky
     }
 
-    # 🔍 Výstup logujeme do konzole
     print("DEBUG /overit-hromadne – výstup:", vysledek)
 
     return vysledek

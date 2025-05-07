@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 from typing import List
 import sqlite3
@@ -26,6 +26,7 @@ async def debug_vstup(request: Request):
     body = await request.json()
     return body
 
+# 🔍 HLAVNÍ endpoint pro fuzzy matching
 @app.post("/overit-hromadne")
 def overit_kody_bulk(data: VstupData):
     conn = None
@@ -54,29 +55,25 @@ def overit_kody_bulk(data: VstupData):
         # Fuzzy matching
         vysledky = [(kod, fuzz.ratio(zadany_kod, kod)) for kod in kody]
         if not vysledky:
-            nejlepsi = "nenalezeno" # Nebo jiná vhodná hodnota, pokud nejsou žádné kódy v databázi
+            nejlepsi = "nenalezeno"
         else:
             max_ratio = max(vysledky, key=lambda x: x[1])[1]
             kandidati = [kod for kod, score in vysledky if score == max_ratio]
 
-            # Podmínka: pokud shoda menší než 80 %, vrátit "špatný kód"
             if max_ratio < 80:
                 nejlepsi = "špatný kód"
             else:
                 if len(kandidati) == 1:
                     nejlepsi = kandidati[0]
                 else:
-                    # Zvažte jiné metriky nebo logiku pro výběr z více kandidátů
                     nejlepsi = max(kandidati, key=lambda k: fuzz.partial_ratio(zadany_kod, k))
 
-        # Přidat do výstupu
         vysledne_polozky.append({
             "Katalog": nejlepsi,
             "Mnozstvi": polozka.Mnozstvi,
             "CisloPolozky": polozka.CisloPolozky
         })
 
-    # Vrátit ve stejném formátu
     return {
         "array": vysledne_polozky,
         "__IMTAGGLENGTH__": data.IMTAGGLENGTH

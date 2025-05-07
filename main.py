@@ -1,34 +1,32 @@
 from fastapi import FastAPI, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from typing import List
 import sqlite3
 from rapidfuzz import fuzz
 
 app = FastAPI()
 
-# Model jednotlivé položky
+# Jedna položka
 class Polozka(BaseModel):
     Katalog: str
     Mnozstvi: int
     CisloPolozky: int
 
-# Model celého vstupu, alias pro __IMTAGGLENGTH__
+# Model vstupu s klíčem "Polozky"
 class VstupData(BaseModel):
-    array: List[Polozka]
-    IMTAGGLENGTH: int = Field(..., alias="__IMTAGGLENGTH__")
+    Polozky: List[Polozka]
 
-    class Config:
-        allow_population_by_field_name = True
-
-# 🔍 DEBUGGING endpoint – vrací přesně, co mu bylo posláno
+# ✅ Debugovací endpoint pro ladění vstupu
 @app.post("/debug-vstup")
 async def debug_vstup(request: Request):
     body = await request.json()
+    print("DEBUG /debug-vstup – přijatý vstup:", body)
     return body
 
-# 🔍 HLAVNÍ endpoint pro fuzzy matching
+# ✅ Hlavní endpoint pro ověření kódů
 @app.post("/overit-hromadne")
 def overit_kody_bulk(data: VstupData):
+    # Připojení k databázi
     conn = None
     try:
         conn = sqlite3.connect("produkty.db")
@@ -44,15 +42,14 @@ def overit_kody_bulk(data: VstupData):
     if not vysledky_db:
         raise HTTPException(status_code=404, detail="Databáze neobsahuje žádné kódy")
 
-    # Vyčištění kódů z databáze
+    # Vyčištění seznamu
     kody = [radek[0] for radek in vysledky_db if radek[0]]
 
     vysledne_polozky = []
 
-    for polozka in data.array:
+    for polozka in data.Polozky:
         zadany_kod = polozka.Katalog
 
-        # Fuzzy matching
         vysledky = [(kod, fuzz.ratio(zadany_kod, kod)) for kod in kody]
         if not vysledky:
             nejlepsi = "nenalezeno"
@@ -74,7 +71,11 @@ def overit_kody_bulk(data: VstupData):
             "CisloPolozky": polozka.CisloPolozky
         })
 
-    return {
-        "array": vysledne_polozky,
-        "__IMTAGGLENGTH__": data.IMTAGGLENGTH
+    vysledek = {
+        "Polozky": vysledne_polozky
     }
+
+    # 🔍 Výstup logujeme do konzole
+    print("DEBUG /overit-hromadne – výstup:", vysledek)
+
+    return vysledek

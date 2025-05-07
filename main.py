@@ -20,6 +20,12 @@ class VstupData(BaseModel):
     class Config:
         allow_population_by_field_name = True
 
+# 🔍 DEBUGGING endpoint – vrací přesně, co mu bylo posláno
+@app.post("/debug-vstup")
+async def debug_vstup(request: Request):
+    body = await request.json()
+    return body
+
 @app.post("/overit-hromadne")
 def overit_kody_bulk(data: VstupData):
     conn = None

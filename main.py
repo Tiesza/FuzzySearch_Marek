@@ -87,3 +87,43 @@ def overit_kody_bulk(data: VstupData):
     print("DEBUG /overit-hromadne – výstup:", vysledek)
 
     return vysledek
+    
+# ✅ Hlavní endpoint pro vrácení 1. řádku
+@app.post("/normalizovat-kody")
+def normalizovat_kody(data: VstupData):
+    conn = None
+    try:
+        conn = sqlite3.connect("produkty.db")
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT Katalog, AlternativKatalog1, AlternativKatalog2, AlternativKatalog3
+            FROM produkty
+        """)
+        zaznamy = cursor.fetchall()
+    except sqlite3.Error as e:
+        raise HTTPException(status_code=500, detail=f"Chyba databáze: {str(e)}")
+    finally:
+        if conn:
+            conn.close()
+
+    if not zaznamy:
+        raise HTTPException(status_code=404, detail="Databáze je prázdná")
+
+    vysledne_polozky = []
+
+    for polozka in data.Polozky:
+        zadany_kod = polozka.Katalog.strip()
+        nalezeny_kod = "nenalezeno"
+
+        for radek in zaznamy:
+            if any(zadany_kod == (sl.strip() if sl else "") for sl in radek):
+                nalezeny_kod = radek[0]  # vždy vrací hodnotu z prvního sloupce
+                break
+
+        vysledne_polozky.append({
+            "Katalog": nalezeny_kod,
+            "Mnozstvi": polozka.Mnozstvi,
+            "CisloPolozky": polozka.CisloPolozky
+        })
+
+    return {"Polozky": vysledne_polozky}

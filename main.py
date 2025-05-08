@@ -40,24 +40,30 @@ def overit_kody_bulk(data: VstupData):
     if not vysledky_db:
         raise HTTPException(status_code=404, detail="Databáze neobsahuje žádné záznamy")
 
-    # Množina všech známých kódů
-    kody = set()
+    # Mapa pro porovnání (normalizovaný kód => originální kód)
+    kody_normalizovane = {}
+
     for radek in vysledky_db:
         for hodnota in radek:
             if hodnota:
-                kody.add(str(hodnota).strip())
+                original = str(hodnota).strip()
+                normalizovany = original.upper()
+                kody_normalizovane[normalizovany] = original
 
     vysledne_polozky = []
 
     for polozka in data.polozky:
         zadany_kod = polozka.Katalog.strip()
+        zadany_kod_norm = zadany_kod.upper()
 
-        # ✅ Nejprve kontrola přesné shody
-        if zadany_kod in kody:
-            nejlepsi = zadany_kod
+        if zadany_kod_norm in kody_normalizovane:
+            nejlepsi = kody_normalizovane[zadany_kod_norm]
         else:
-            # Fuzzy matching
-            vysledky = [(kod, fuzz.ratio(zadany_kod, kod)) for kod in kody]
+            # Fuzzy matching nad normalizovanými kódy
+            vysledky = [
+                (kod_norm, fuzz.ratio(zadany_kod_norm, kod_norm))
+                for kod_norm in kody_normalizovane
+            ]
 
             if not vysledky:
                 nejlepsi = "nenalezeno"
@@ -69,9 +75,14 @@ def overit_kody_bulk(data: VstupData):
                     nejlepsi = "špatný kód"
                 else:
                     if len(kandidati) == 1:
-                        nejlepsi = kandidati[0]
+                        nejlepsi = kody_normalizovane[kandidati[0]]
                     else:
-                        nejlepsi = max(kandidati, key=lambda k: fuzz.partial_ratio(zadany_kod, k))
+                        # Doplňkové rozhodnutí podle partial_ratio
+                        nejlepsi = max(
+                            kandidati,
+                            key=lambda k: fuzz.partial_ratio(zadany_kod_norm, k)
+                        )
+                        nejlepsi = kody_normalizovane[nejlepsi]
 
         vysledne_polozky.append({
             "Katalog": nejlepsi,
@@ -80,6 +91,8 @@ def overit_kody_bulk(data: VstupData):
         })
 
     return {"polozky": vysledne_polozky}
+
+
 # ✅ Endpoint: přesná shoda s hlavním kódem
 @app.post("/normalizovat-kody")
 def normalizovat_kody(data: VstupData):

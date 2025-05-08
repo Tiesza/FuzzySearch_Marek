@@ -1,63 +1,56 @@
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
-from typing import List
+from typing import List, Union
 import sqlite3
 from rapidfuzz import fuzz
 
 app = FastAPI()
 
-# Jedna položka
+# Jedna položka (Mnozstvi může být string i int)
 class Polozka(BaseModel):
     Katalog: str
-    Mnozstvi: int
+    Mnozstvi: Union[str, int]
     CisloPolozky: int
 
-# Model vstupu s klíčem "Polozky"
+# Model vstupu s klíčem "polozky"
 class VstupData(BaseModel):
-    Polozky: List[Polozka]
+    polozky: List[Polozka]
 
-# ✅ Debugovací endpoint pro ladění vstupu
+# ✅ Debugovací endpoint
 @app.post("/debug-vstup")
 async def debug_vstup(request: Request):
     body = await request.json()
     print("DEBUG /debug-vstup – přijatý vstup:", body)
     return body
 
-# ✅ Hlavní endpoint pro ověření kódů
+# ✅ Endpoint: fuzzy ověření
 @app.post("/overit-hromadne")
 def overit_kody_bulk(data: VstupData):
-    conn = None
     try:
-        conn = sqlite3.connect("produkty_kody.db")
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT Katalog, AlternativKatalog1, AlternativKatalog2, AlternativKatalog3
-            FROM produkty
-        """)
-        vysledky_db = cursor.fetchall()
+        with sqlite3.connect("produkty_kody.db") as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT Katalog, AlternativKatalog1, AlternativKatalog2, AlternativKatalog3
+                FROM produkty_kody
+            """)
+            vysledky_db = cursor.fetchall()
     except sqlite3.Error as e:
-        raise HTTPException(status_code=500, detail=f"Chyba při připojení nebo čtení z databáze: {str(e)}")
-    finally:
-        if conn:
-            conn.close()
+        raise HTTPException(status_code=500, detail=f"Chyba při práci s databází: {str(e)}")
 
     if not vysledky_db:
         raise HTTPException(status_code=404, detail="Databáze neobsahuje žádné záznamy")
 
-    # Vytvoření množiny všech dostupných kódů (unikátní hodnoty, žádné None)
+    # Vytvoření množiny všech dostupných kódů
     kody = set()
     for radek in vysledky_db:
         for hodnota in radek:
             if hodnota:
                 kody.add(str(hodnota).strip())
 
-    kody = list(kody)
-
     vysledne_polozky = []
 
-    for polozka in data.Polozky:
+    for polozka in data.polozky:
         zadany_kod = polozka.Katalog.strip()
-
         vysledky = [(kod, fuzz.ratio(zadany_kod, kod)) for kod in kody]
 
         if not vysledky:
@@ -80,44 +73,34 @@ def overit_kody_bulk(data: VstupData):
             "CisloPolozky": polozka.CisloPolozky
         })
 
-    vysledek = {
-        "Polozky": vysledne_polozky
-    }
+    return {"polozky": vysledne_polozky}
 
-    print("DEBUG /overit-hromadne – výstup:", vysledek)
-
-    return vysledek
-    
-# ✅ Hlavní endpoint pro vrácení 1. řádku
+# ✅ Endpoint: přesná shoda s hlavním kódem
 @app.post("/normalizovat-kody")
 def normalizovat_kody(data: VstupData):
-    conn = None
     try:
-        conn = sqlite3.connect("produkty_kody.db")
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT Katalog, AlternativKatalog1, AlternativKatalog2, AlternativKatalog3
-            FROM produkty
-        """)
-        zaznamy = cursor.fetchall()
+        with sqlite3.connect("produkty_kody.db") as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT Katalog, AlternativKatalog1, AlternativKatalog2, AlternativKatalog3
+                FROM produkty_kody
+            """)
+            zaznamy = cursor.fetchall()
     except sqlite3.Error as e:
         raise HTTPException(status_code=500, detail=f"Chyba databáze: {str(e)}")
-    finally:
-        if conn:
-            conn.close()
 
     if not zaznamy:
         raise HTTPException(status_code=404, detail="Databáze je prázdná")
 
     vysledne_polozky = []
 
-    for polozka in data.Polozky:
+    for polozka in data.polozky:
         zadany_kod = polozka.Katalog.strip()
         nalezeny_kod = "nenalezeno"
 
         for radek in zaznamy:
             if any(zadany_kod == (sl.strip() if sl else "") for sl in radek):
-                nalezeny_kod = radek[0]  # vždy vrací hodnotu z prvního sloupce
+                nalezeny_kod = radek[0]
                 break
 
         vysledne_polozky.append({
@@ -126,4 +109,4 @@ def normalizovat_kody(data: VstupData):
             "CisloPolozky": polozka.CisloPolozky
         })
 
-    return {"Polozky": vysledne_polozky}
+    return {"polozky": vysledne_polozky}

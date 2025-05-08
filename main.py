@@ -28,7 +28,7 @@ async def debug_vstup(request: Request):
 def overit_kody_bulk(data: VstupData):
     conn = None
     try:
-        conn = sqlite3.connect("produkty.db")
+        conn = sqlite3.connect("produkty_kody.db")
         cursor = conn.cursor()
         cursor.execute("""
             SELECT Katalog, AlternativKatalog1, AlternativKatalog2, AlternativKatalog3
@@ -93,7 +93,7 @@ def overit_kody_bulk(data: VstupData):
 def normalizovat_kody(data: VstupData):
     conn = None
     try:
-        conn = sqlite3.connect("produkty.db")
+        conn = sqlite3.connect("produkty_kody.db")
         cursor = conn.cursor()
         cursor.execute("""
             SELECT Katalog, AlternativKatalog1, AlternativKatalog2, AlternativKatalog3

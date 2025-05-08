@@ -40,7 +40,7 @@ def overit_kody_bulk(data: VstupData):
     if not vysledky_db:
         raise HTTPException(status_code=404, detail="Databáze neobsahuje žádné záznamy")
 
-    # Vytvoření množiny všech dostupných kódů
+    # Množina všech známých kódů
     kody = set()
     for radek in vysledky_db:
         for hodnota in radek:
@@ -51,21 +51,27 @@ def overit_kody_bulk(data: VstupData):
 
     for polozka in data.polozky:
         zadany_kod = polozka.Katalog.strip()
-        vysledky = [(kod, fuzz.ratio(zadany_kod, kod)) for kod in kody]
 
-        if not vysledky:
-            nejlepsi = "nenalezeno"
+        # ✅ Nejprve kontrola přesné shody
+        if zadany_kod in kody:
+            nejlepsi = zadany_kod
         else:
-            max_ratio = max(vysledky, key=lambda x: x[1])[1]
-            kandidati = [kod for kod, score in vysledky if score == max_ratio]
+            # Fuzzy matching
+            vysledky = [(kod, fuzz.ratio(zadany_kod, kod)) for kod in kody]
 
-            if max_ratio < 80:
-                nejlepsi = "špatný kód"
+            if not vysledky:
+                nejlepsi = "nenalezeno"
             else:
-                if len(kandidati) == 1:
-                    nejlepsi = kandidati[0]
+                max_ratio = max(vysledky, key=lambda x: x[1])[1]
+                kandidati = [kod for kod, score in vysledky if score == max_ratio]
+
+                if max_ratio < 80:
+                    nejlepsi = "špatný kód"
                 else:
-                    nejlepsi = max(kandidati, key=lambda k: fuzz.partial_ratio(zadany_kod, k))
+                    if len(kandidati) == 1:
+                        nejlepsi = kandidati[0]
+                    else:
+                        nejlepsi = max(kandidati, key=lambda k: fuzz.partial_ratio(zadany_kod, k))
 
         vysledne_polozky.append({
             "Katalog": nejlepsi,
@@ -74,7 +80,6 @@ def overit_kody_bulk(data: VstupData):
         })
 
     return {"polozky": vysledne_polozky}
-
 # ✅ Endpoint: přesná shoda s hlavním kódem
 @app.post("/normalizovat-kody")
 def normalizovat_kody(data: VstupData):
@@ -110,3 +115,32 @@ def normalizovat_kody(data: VstupData):
         })
 
     return {"polozky": vysledne_polozky}
+
+
+# ✅ Endpoint: doplnění názvů podle katalogového čísla
+@app.post("/doplnit-nazvy")
+def doplnit_nazvy(data: VstupData):
+    try:
+        with sqlite3.connect("produkty_nazvy.db") as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT Katalog, Nazev FROM produkty_nazvy")
+            zaznamy = cursor.fetchall()
+            katalog_na_nazev = {str(katalog).strip(): nazev for katalog, nazev in zaznamy}
+    except sqlite3.Error as e:
+        raise HTTPException(status_code=500, detail=f"Chyba při načítání názvů z databáze: {str(e)}")
+
+    vysledne_polozky = []
+
+    for polozka in data.polozky:
+        zadany_kod = polozka.Katalog.strip()
+        nazev = katalog_na_nazev.get(zadany_kod, "nenalezeno")
+
+        vysledne_polozky.append({
+            "Katalog": zadany_kod,
+            "Nazev": nazev,
+            "Mnozstvi": polozka.Mnozstvi,
+            "CisloPolozky": polozka.CisloPolozky
+        })
+
+    return {"polozky": vysledne_polozky}
+

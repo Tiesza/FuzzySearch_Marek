@@ -125,7 +125,7 @@ def enrich_names(data: InputData):
     results = []
     for item in data.items:
         code_raw = item.catalog.strip()
-        name = name_map.get(code_raw, "not found")
+        name = name_map.get(code_raw, "spatny kod pro automatizaci")
         results.append({
             "Katalog": code_raw,
             "Nazev": name,

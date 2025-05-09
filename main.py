@@ -100,7 +100,7 @@ def normalize_codes(data: InputData):
     results = []
     for item in data.items:
         code_raw = item.catalog.strip()
-        found = "not found"
+        found = "nenalezeno"
         for row in records:
             if any(code_raw == (alt.strip() if alt else "") for alt in row):
                 found = row[0]

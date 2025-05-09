@@ -1,159 +1,136 @@
-from fastapi import FastAPI, HTTPException, Request
-from pydantic import BaseModel
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
+from fastapi.requests import Request
+from pydantic import BaseModel, Field
 from typing import List, Union
 import sqlite3
 from rapidfuzz import fuzz
 
 app = FastAPI()
 
-# Jedna položka (Mnozstvi může být string i int)
-class Polozka(BaseModel):
-    Katalog: str
-    Mnozstvi: Union[str, int]
-    CisloPolozky: int
 
-# Model vstupu s klíčem "polozky"
-class VstupData(BaseModel):
-    polozky: List[Polozka]
+@app.exception_handler(sqlite3.Error)
+async def sqlite_exception_handler(_request: Request, exc: sqlite3.Error):
+    return JSONResponse(status_code=500, content={"detail": f"Database error: {exc}"})
 
-# ✅ Debugovací endpoint
+
+class Item(BaseModel):
+    catalog: str = Field(alias="Katalog")
+    quantity: Union[str, int] = Field(alias="Mnozstvi")
+    item_number: int = Field(alias="CisloPolozky")
+
+    class Config:
+        allow_population_by_field_name = True
+
+
+class InputData(BaseModel):
+    items: List[Item] = Field(alias="polozky")
+
+    class Config:
+        allow_population_by_field_name = True
+
+
 @app.post("/debug-vstup")
-async def debug_vstup(request: Request):
+async def debug_input(request: Request):
     body = await request.json()
-    print("DEBUG /debug-vstup – přijatý vstup:", body)
+    print("DEBUG Retrieved input", body)
     return body
 
-# ✅ Endpoint: fuzzy ověření
+
 @app.post("/overit-hromadne")
-def overit_kody_bulk(data: VstupData):
-    try:
-        with sqlite3.connect("produkty_kody.db") as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT Katalog, AlternativKatalog1, AlternativKatalog2, AlternativKatalog3
-                FROM produkty_kody
-            """)
-            vysledky_db = cursor.fetchall()
-    except sqlite3.Error as e:
-        raise HTTPException(status_code=500, detail=f"Chyba při práci s databází: {str(e)}")
+def verify_codes_bulk(data: InputData):
+    with sqlite3.connect("produkty_kody.db") as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT Katalog, AlternativKatalog1, AlternativKatalog2, AlternativKatalog3
+            FROM produkty_kody
+        """)
+        records = cursor.fetchall()
 
-    if not vysledky_db:
-        raise HTTPException(status_code=404, detail="Databáze neobsahuje žádné záznamy")
+    if not records:
+        raise HTTPException(status_code=404, detail="Database has no records")
 
-    # Mapa pro porovnání (normalizovaný kód => originální kód)
-    kody_normalizovane = {}
+    norm_codes = {str(val).strip().upper(): str(val).strip()
+                  for row in records for val in row if val}
 
-    for radek in vysledky_db:
-        for hodnota in radek:
-            if hodnota:
-                original = str(hodnota).strip()
-                normalizovany = original.upper()
-                kody_normalizovane[normalizovany] = original
-
-    vysledne_polozky = []
-
-    for polozka in data.polozky:
-        zadany_kod = polozka.Katalog.strip()
-        zadany_kod_norm = zadany_kod.upper()
-
-        if zadany_kod_norm in kody_normalizovane:
-            nejlepsi = kody_normalizovane[zadany_kod_norm]
+    results = []
+    for item in data.items:
+        code_raw = item.catalog.strip()
+        code_key = code_raw.upper()
+        if code_key in norm_codes:
+            best = norm_codes[code_key]
         else:
-            # Fuzzy matching nad normalizovanými kódy
-            vysledky = [
-                (kod_norm, fuzz.ratio(zadany_kod_norm, kod_norm))
-                for kod_norm in kody_normalizovane
-            ]
-
-            if not vysledky:
-                nejlepsi = "nenalezeno"
+            scores = [(k, fuzz.ratio(code_key, k)) for k in norm_codes]
+            if not scores:
+                best = "Not found"
             else:
-                max_ratio = max(vysledky, key=lambda x: x[1])[1]
-                kandidati = [kod for kod, score in vysledky if score == max_ratio]
-
-                if max_ratio < 80:
-                    nejlepsi = "špatný kód"
+                max_score = max(scores, key=lambda x: x[1])[1]
+                candidates = [k for k, s in scores if s == max_score]
+                if max_score < 80:
+                    best = "Wrong code"
                 else:
-                    if len(kandidati) == 1:
-                        nejlepsi = kody_normalizovane[kandidati[0]]
+                    if len(candidates) == 1:
+                        best = norm_codes[candidates[0]]
                     else:
-                        # Doplňkové rozhodnutí podle partial_ratio
-                        nejlepsi = max(
-                            kandidati,
-                            key=lambda k: fuzz.partial_ratio(zadany_kod_norm, k)
-                        )
-                        nejlepsi = kody_normalizovane[nejlepsi]
+                        partial = max(candidates, key=lambda k: fuzz.partial_ratio(code_key, k))
+                        best = norm_codes[partial]
 
-        vysledne_polozky.append({
-            "Katalog": nejlepsi,
-            "Mnozstvi": polozka.Mnozstvi,
-            "CisloPolozky": polozka.CisloPolozky
+        results.append({
+            "Katalog": best,
+            "Mnozstvi": item.quantity,
+            "CisloPolozky": item.item_number
         })
 
-    return {"polozky": vysledne_polozky}
+    return {"polozky": results}
 
 
-# ✅ Endpoint: přesná shoda s hlavním kódem
 @app.post("/normalizovat-kody")
-def normalizovat_kody(data: VstupData):
-    try:
-        with sqlite3.connect("produkty_kody.db") as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT Katalog, AlternativKatalog1, AlternativKatalog2, AlternativKatalog3
-                FROM produkty_kody
-            """)
-            zaznamy = cursor.fetchall()
-    except sqlite3.Error as e:
-        raise HTTPException(status_code=500, detail=f"Chyba databáze: {str(e)}")
+def normalize_codes(data: InputData):
+    with sqlite3.connect("produkty_kody.db") as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT Katalog, AlternativKatalog1, AlternativKatalog2, AlternativKatalog3
+            FROM produkty_kody
+        """)
+        records = cursor.fetchall()
 
-    if not zaznamy:
-        raise HTTPException(status_code=404, detail="Databáze je prázdná")
+    if not records:
+        raise HTTPException(status_code=404, detail="Database is empty")
 
-    vysledne_polozky = []
-
-    for polozka in data.polozky:
-        zadany_kod = polozka.Katalog.strip()
-        nalezeny_kod = "nenalezeno"
-
-        for radek in zaznamy:
-            if any(zadany_kod == (sl.strip() if sl else "") for sl in radek):
-                nalezeny_kod = radek[0]
+    results = []
+    for item in data.items:
+        code_raw = item.catalog.strip()
+        found = "not found"
+        for row in records:
+            if any(code_raw == (alt.strip() if alt else "") for alt in row):
+                found = row[0]
                 break
-
-        vysledne_polozky.append({
-            "Katalog": nalezeny_kod,
-            "Mnozstvi": polozka.Mnozstvi,
-            "CisloPolozky": polozka.CisloPolozky
+        results.append({
+            "Katalog": found,
+            "Mnozstvi": item.quantity,
+            "CisloPolozky": item.item_number
         })
 
-    return {"polozky": vysledne_polozky}
+    return {"polozky": results}
 
 
-# ✅ Endpoint: doplnění názvů podle katalogového čísla
 @app.post("/doplnit-nazvy")
-def doplnit_nazvy(data: VstupData):
-    try:
-        with sqlite3.connect("produkty_nazvy.db") as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT Katalog, Nazev FROM produkty_nazvy")
-            zaznamy = cursor.fetchall()
-            katalog_na_nazev = {str(katalog).strip(): nazev for katalog, nazev in zaznamy}
-    except sqlite3.Error as e:
-        raise HTTPException(status_code=500, detail=f"Chyba při načítání názvů z databáze: {str(e)}")
+def enrich_names(data: InputData):
+    with sqlite3.connect("produkty_nazvy.db") as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT Katalog, Nazev FROM produkty_nazvy")
+        rows = cursor.fetchall()
+        name_map = {str(k).strip(): v for k, v in rows}
 
-    vysledne_polozky = []
-
-    for polozka in data.polozky:
-        zadany_kod = polozka.Katalog.strip()
-        nazev = katalog_na_nazev.get(zadany_kod, "nenalezeno")
-
-        vysledne_polozky.append({
-            "Katalog": zadany_kod,
-            "Nazev": nazev,
-            "Mnozstvi": polozka.Mnozstvi,
-            "CisloPolozky": polozka.CisloPolozky
+    results = []
+    for item in data.items:
+        code_raw = item.catalog.strip()
+        name = name_map.get(code_raw, "not found")
+        results.append({
+            "Katalog": code_raw,
+            "Nazev": name,
+            "Mnozstvi": item.quantity,
+            "CisloPolozky": item.item_number
         })
 
-    return {"polozky": vysledne_polozky}
-
+    return {"polozky": results}

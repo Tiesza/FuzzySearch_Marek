@@ -62,12 +62,12 @@ def verify_codes_bulk(data: InputData):
         else:
             scores = [(k, fuzz.ratio(code_key, k)) for k in norm_codes]
             if not scores:
-                best = "Not found"
+                best = "nenalezeno"
             else:
                 max_score = max(scores, key=lambda x: x[1])[1]
                 candidates = [k for k, s in scores if s == max_score]
                 if max_score < 80:
-                    best = "Wrong code"
+                    best = "nenalezeno"
                 else:
                     if len(candidates) == 1:
                         best = norm_codes[candidates[0]]
